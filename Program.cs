@@ -12,4 +12,3 @@ var app = ActivatorUtilities.CreateInstance<SmsRepository>(serviceProvider);
 await app.Run();
 
 
-Console.ReadLine();

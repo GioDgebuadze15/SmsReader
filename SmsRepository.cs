@@ -92,7 +92,9 @@ public class SmsRepository
                 @"(?:\+CMGL: )(?<index>[\d]{1,2})[,]+""[\w ]+"",""(?<sender>[+\w]*)"","""",""(?<time>[+\w\/ :]*)""(?<text>(?s).*?)(?:\r?\n){2}",
                 RegexOptions.Singleline);
         var matches = regex.Matches(response);
-
+        if (matches.Count < 1)
+            Console.WriteLine("No sms found");
+        
         foreach (Match match in matches)
         {
             if (!match.Success) continue;
@@ -104,9 +106,15 @@ public class SmsRepository
 
             Console.WriteLine("Message has successfully saved into database");
             var id = await SaveSmsIntoDatabase(sender, time, text);
-            // await DeleteSmsInPhone(serialPort,index,id);
+            await DeleteSmsInPhone(serialPort, index, id);
             Console.WriteLine("Message has successfully removed from phone");
         }
+
+        Console.WriteLine("####################################");
+        Console.WriteLine("Program has successfully finished");
+        Console.WriteLine("Press any key to close...");
+        Console.WriteLine("####################################");
+        Console.ReadKey();
     }
 
     private async Task<int> SaveSmsIntoDatabase(string sender, string time, string text)
@@ -132,7 +140,7 @@ public class SmsRepository
     {
         if (int.TryParse(index, out var numberIndex))
         {
-            if (!ExecuteCommand(serialPort, $"AT+CMGD={numberIndex}", 5000)) return;
+            if (!ExecuteCommand(serialPort, $"AT+CMGD={numberIndex}", 1000)) return;
             await UpdateDeletedStatus(id);
         }
     }
