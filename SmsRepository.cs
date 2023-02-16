@@ -1,7 +1,7 @@
-using System.Globalization;
 using System.IO.Ports;
 using System.Text.RegularExpressions;
 using SmsSender.EntityFramework;
+using SmsSender.ParserService;
 
 namespace SmsSender;
 
@@ -9,10 +9,13 @@ public class SmsRepository
 {
     private string? PortName { get; set; }
 
-    private const string Format = "yyyy/MM/dd HH:mm:ss";
+    private const string DateTimeFormatYearMonthDayTime = "yyyy/MM/dd HH:mm:ss";
+    private const string DateTimeFormatDayMonthYearTime = "dd/MM/yyyy HH:mm:ss";
 
     private readonly AppDbContext _ctx;
     private const int BaudRate = 38400;
+    private readonly DateTimeParser _dateTimeParser = new();
+    private readonly IntegerParser _integerParser = new();
 
     public SmsRepository(AppDbContext ctx)
     {
@@ -94,7 +97,7 @@ public class SmsRepository
         var matches = regex.Matches(response);
         if (matches.Count < 1)
             Console.WriteLine("No sms found");
-        
+
         foreach (Match match in matches)
         {
             if (!match.Success) continue;
@@ -104,8 +107,14 @@ public class SmsRepository
             var time = match.Groups["time"].Value.Trim();
             var text = match.Groups["text"].Value.Trim();
 
+            var sms = ParseSms(sender, time, text);
+            if (!string.IsNullOrEmpty(sms.Text))
+            {
+                sms = ParseSmsText(sms);
+            }
+
+            var id = await SaveSmsIntoDatabase(sms);
             Console.WriteLine("Message has successfully saved into database");
-            var id = await SaveSmsIntoDatabase(sender, time, text);
             await DeleteSmsInPhone(serialPort, index, id);
             Console.WriteLine("Message has successfully removed from phone");
         }
@@ -117,33 +126,45 @@ public class SmsRepository
         Console.ReadKey();
     }
 
-    private async Task<int> SaveSmsIntoDatabase(string sender, string time, string text)
-    {
-        var sms = new ReceivedSms
+
+    private ReceivedSms ParseSms(string sender, string time, string text)
+        => new()
         {
             Sender = sender,
-            Text = text
+            ReceivedDate = _dateTimeParser.Parse(time.Split('+')[0], DateTimeFormatYearMonthDayTime),
+            Text = text,
         };
 
-        if (DateTimeOffset.TryParseExact(time.Split('+')[0], Format, CultureInfo.InvariantCulture,
-                DateTimeStyles.None, out var dateTimeOffset))
+    private ReceivedSms ParseSmsText(ReceivedSms sms)
+    {
+        var regex = new Regex(
+            @": (?<carNumber>[\d\w\-_]+), [\w]+ [\w]+[\w-]+[^\d](?<article>[\d-]+)[\w .]+\:(?<street>[\w\d . :]+),[a-zA-Z :]+(?<time>[+\w\/ :]*), [a-zA-Z: ]+\: (?<receiptNumber>[\w]+), [a-zA-Z:]+ (?<amount>[\d]+).+chabarebidan (?<term>[\d]+)",
+            RegexOptions.Singleline);
+
+        var match = regex.Match(sms.Text!);
+        if (!match.Success)
         {
-            sms.ReceivedDate = dateTimeOffset;
+            Console.WriteLine("Cannot parse sms text");
+            return sms;
         }
 
-        _ctx.Add(sms);
-        await _ctx.SaveChangesAsync();
-        return sms.Id;
+        ParseMatchedTextToSms(ref sms, match);
+
+        return sms;
     }
 
     private async Task DeleteSmsInPhone(SerialPort serialPort, string index, int id)
     {
-        if (int.TryParse(index, out var numberIndex))
-        {
-            if (!ExecuteCommand(serialPort, $"AT+CMGD={numberIndex}", 1000)) return;
-            await UpdateDeletedStatus(id);
-        }
+        var numberIndex = _integerParser.Parse(index, null);
+        if (numberIndex == null) return;
+        if (!ExecuteCommand(serialPort, $"AT+CMGD={numberIndex}", 1000)) return;
+        await UpdateDeletedStatus(id);
     }
+
+    private static void DeleteAllSmsInPhone(SerialPort serialPort)
+        =>
+            ExecuteCommand(serialPort, $"AT+QMGDA=\"DEL ALL\"", 1000);
+
 
     private bool SetComPort()
     {
@@ -154,10 +175,34 @@ public class SmsRepository
         return true;
     }
 
+    private void ParseMatchedTextToSms(ref ReceivedSms sms, Match match)
+    {
+        sms.CarNumber = match.Groups["carNumber"].Value.Trim();
+        sms.Article = match.Groups["article"].Value.Trim();
+        sms.Street = match.Groups["street"].Value.Trim();
+        sms.DateOfFine = _dateTimeParser.Parse(match.Groups["time"].Value.Trim(), DateTimeFormatDayMonthYearTime);
+        sms.ReceiptNumber = match.Groups["receiptNumber"].Value.Trim();
+        sms.Amount = _integerParser.Parse(match.Groups["amount"].Value.Trim(), null);
+        sms.Term = _integerParser.Parse(match.Groups["term"].Value.Trim(), null);
+        sms.Parsed = true;
+
+        if (sms.DateOfFine != null && sms.Term != null)
+        {
+            sms.LastDateOfPayment = sms.DateOfFine.Value.AddDays(sms.Term.Value);
+        }
+    }
+
     private async Task UpdateDeletedStatus(int id)
     {
         var sms = _ctx.ReceivedSms.FirstOrDefault(x => x.Id.Equals(id));
         if (sms != null) sms.Deleted = true;
         await _ctx.SaveChangesAsync();
+    }
+
+    private async Task<int> SaveSmsIntoDatabase(ReceivedSms sms)
+    {
+        _ctx.Add(sms);
+        await _ctx.SaveChangesAsync();
+        return sms.Id;
     }
 }
