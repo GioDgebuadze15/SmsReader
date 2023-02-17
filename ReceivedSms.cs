@@ -30,5 +30,7 @@ public class ReceivedSms
     public DateTimeOffset CreatedDate { get; set; } = DateTimeOffset.Now;
 
     public bool Parsed { get; set; }
+
+    public SmsStatus Status { get; set; } = SmsStatus.Other;
     public bool Deleted { get; set; }
 }

@@ -9,6 +9,7 @@ public class SmsRepository
 {
     private string? PortName { get; set; }
 
+    private const string DateFormatDayMonthYear = "dd/MM/yyyy";
     private const string DateTimeFormatYearMonthDayTime = "yyyy/MM/dd HH:mm:ss";
     private const string DateTimeFormatDayMonthYearTime = "dd/MM/yyyy HH:mm:ss";
 
@@ -30,7 +31,7 @@ public class SmsRepository
             return;
         }
 
-        if (PortName != null)
+        if (!string.IsNullOrEmpty(PortName))
         {
             using var serialPort = new SerialPort(PortName, BaudRate);
             Init(serialPort);
@@ -90,11 +91,7 @@ public class SmsRepository
 
         var response = ExecuteCommandWithResponse(serialPort, "AT+CMGL=\"ALL\"", 5000);
 
-        var regex =
-            new Regex(
-                @"(?:\+CMGL: )(?<index>[\d]{1,2})[,]+""[\w ]+"",""(?<sender>[+\w]*)"","""",""(?<time>[+\w\/ :]*)""(?<text>(?s).*?)(?:\r?\n){2}",
-                RegexOptions.Singleline);
-        var matches = regex.Matches(response);
+        var matches = RegexParser.ParseSms(response);
         if (matches.Count < 1)
             Console.WriteLine("No sms found");
 
@@ -137,19 +134,31 @@ public class SmsRepository
 
     private ReceivedSms ParseSmsText(ReceivedSms sms)
     {
-        var regex = new Regex(
-            @": (?<carNumber>[\d\w\-_]+), [\w]+ [\w]+[\w-]+[^\d](?<article>[\d-]+)[\w .]+\:(?<street>[\w\d . :]+),[a-zA-Z :]+(?<time>[+\w\/ :]*), [a-zA-Z: ]+\: (?<receiptNumber>[\w]+), [a-zA-Z:]+ (?<amount>[\d]+).+chabarebidan (?<term>[\d]+)",
-            RegexOptions.Singleline);
+        if (string.IsNullOrEmpty(sms.Text)) return sms;
+        var matchForFine = RegexParser.ParseSmsForFine(sms.Text);
+        if (matchForFine.Success)
+        {
+            ParseMatchedTextToSms(ref sms, matchForFine);
+            return sms;
+        }
 
-        var match = regex.Match(sms.Text!);
-        if (!match.Success)
+        var matchForReminder = RegexParser.ParseSmsForReminder(sms.Text);
+        if (!matchForReminder.Success)
         {
             Console.WriteLine("Cannot parse sms text");
             return sms;
         }
 
-        ParseMatchedTextToSms(ref sms, match);
+        sms.ReceiptNumber = matchForReminder.Groups["receiptNumber"].Value.Trim();
+        var lastDateOfPayment = matchForReminder.Groups["lastDateOfPayment"].Value.Trim().Replace(".", "/");
+        if (lastDateOfPayment.EndsWith("/"))
+        {
+            sms.LastDateOfPayment = _dateTimeParser.Parse(lastDateOfPayment[..^1], DateFormatDayMonthYear);
+        }
 
+        if (string.IsNullOrEmpty(sms.ReceiptNumber)) return sms;
+
+        FillRemainderSms(ref sms);
         return sms;
     }
 
@@ -169,8 +178,7 @@ public class SmsRepository
     private bool SetComPort()
     {
         var portName = UsbSerialConverterInfo.GetPortName();
-        if (portName == null && portName == "")
-            return false;
+        if (string.IsNullOrEmpty(portName)) return false;
         PortName = portName;
         return true;
     }
@@ -185,12 +193,37 @@ public class SmsRepository
         sms.Amount = _integerParser.Parse(match.Groups["amount"].Value.Trim(), null);
         sms.Term = _integerParser.Parse(match.Groups["term"].Value.Trim(), null);
         sms.Parsed = true;
+        sms.Status = SmsStatus.Fine;
 
         if (sms.DateOfFine != null && sms.Term != null)
         {
             sms.LastDateOfPayment = sms.DateOfFine.Value.AddDays(sms.Term.Value);
         }
     }
+
+    private void FillRemainderSms(ref ReceivedSms sms)
+    {
+        var fineSms = GetSmsByReceiptNumber(sms.ReceiptNumber!);
+        if (fineSms == null) return;
+        sms.CarNumber = fineSms.CarNumber;
+        sms.Article = fineSms.Article;
+        sms.Street = fineSms.Street;
+        sms.DateOfFine = fineSms.DateOfFine;
+        sms.Amount = fineSms.Amount;
+        sms.Term = fineSms.Term;
+        sms.Parsed = true;
+        sms.Status = SmsStatus.Reminder;
+
+        if (sms.DateOfFine != null && sms.Term != null && sms.LastDateOfPayment == null)
+        {
+            sms.LastDateOfPayment = sms.DateOfFine.Value.AddDays(sms.Term.Value);
+        }
+    }
+
+    private ReceivedSms? GetSmsByReceiptNumber(string receiptNumber)
+        => _ctx.ReceivedSms.FirstOrDefault(x =>
+            x.ReceiptNumber != null &&
+            x.ReceiptNumber.Equals(receiptNumber, StringComparison.InvariantCultureIgnoreCase));
 
     private async Task UpdateDeletedStatus(int id)
     {
