@@ -150,6 +150,8 @@ public class SmsRepository
         }
 
         sms.ReceiptNumber = matchForReminder.Groups["receiptNumber"].Value.Trim();
+        sms.Parsed = true;
+        sms.Status = SmsStatus.Reminder;
         var lastDateOfPayment = matchForReminder.Groups["lastDateOfPayment"].Value.Trim().Replace(".", "/");
         if (lastDateOfPayment.EndsWith("/"))
         {
@@ -212,7 +214,7 @@ public class SmsRepository
         sms.Amount = fineSms.Amount;
         sms.Term = fineSms.Term;
         sms.Parsed = true;
-        sms.Status = SmsStatus.Reminder;
+
 
         if (sms.DateOfFine != null && sms.Term != null && sms.LastDateOfPayment == null)
         {
@@ -221,9 +223,11 @@ public class SmsRepository
     }
 
     private ReceivedSms? GetSmsByReceiptNumber(string receiptNumber)
-        => _ctx.ReceivedSms.FirstOrDefault(x =>
-            x.ReceiptNumber != null &&
-            x.ReceiptNumber.Equals(receiptNumber, StringComparison.InvariantCultureIgnoreCase));
+        => _ctx.ReceivedSms
+            .AsEnumerable()
+            .FirstOrDefault(x =>
+                x.ReceiptNumber != null &&
+                x.ReceiptNumber.Equals(receiptNumber, StringComparison.InvariantCultureIgnoreCase));
 
     private async Task UpdateDeletedStatus(int id)
     {
