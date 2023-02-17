@@ -8,13 +8,13 @@ namespace SmsSender;
 public class SmsRepository
 {
     private string? PortName { get; set; }
+    private const int BaudRate = 38400;
 
     private const string DateFormatDayMonthYear = "dd/MM/yyyy";
     private const string DateTimeFormatYearMonthDayTime = "yyyy/MM/dd HH:mm:ss";
     private const string DateTimeFormatDayMonthYearTime = "dd/MM/yyyy HH:mm:ss";
 
     private readonly AppDbContext _ctx;
-    private const int BaudRate = 38400;
     private readonly DateTimeParser _dateTimeParser = new();
     private readonly IntegerParser _integerParser = new();
 
@@ -34,17 +34,22 @@ public class SmsRepository
         if (!string.IsNullOrEmpty(PortName))
         {
             using var serialPort = new SerialPort(PortName, BaudRate);
-            Init(serialPort);
+            var initialized = Init(serialPort);
+            if (!initialized)
+            {
+                Console.WriteLine("Failed to initialize the device");
+                return;
+            }
             await ReadSms(serialPort);
         }
     }
 
-    private static void Init(SerialPort serialPort)
+    private static bool Init(SerialPort serialPort)
     {
         serialPort.Open();
         Console.WriteLine("Port has successfully opened");
 
-        if (!ExecuteCommand(serialPort, "AT", 200)) return;
+        if (!ExecuteCommand(serialPort, "AT", 200)) return false;
         ExecuteCommand(serialPort, "ATE0", 100);
 
         var time = DateTime.Now.ToLocalTime().ToString("yy/MM/dd,HH:mm:sszz");
@@ -54,6 +59,7 @@ public class SmsRepository
         Console.WriteLine("####################################");
         Console.WriteLine("Initialization finished successfully");
         Console.WriteLine("####################################");
+        return true;
     }
 
     private static bool ExecuteCommand(SerialPort serialPort, string command, int timeout)

@@ -56,9 +56,10 @@ public class UsbSerialConverterInfo
         collection.Dispose();
 
         var usbConverter = converters.FirstOrDefault(x => x.Name.Contains("COM"));
+        if (usbConverter == null) return null;
 
         var regex = new Regex(@"(?<comPort>COM\d+)", RegexOptions.Compiled);
-        var portName = regex.Match(usbConverter!.Name).Groups["comPort"].Value.Trim();
+        var portName = regex.Match(usbConverter.Name).Groups["comPort"].Value.Trim();
 
         Console.WriteLine($"Device {usbConverter.DeviceId} is connected to COM port {portName}");
 
